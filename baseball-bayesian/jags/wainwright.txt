@@ -1,0 +1,10 @@
+
+  model {
+  for (i in 1:N) {
+    yW[i] ~ dpois(theta)
+  }
+
+  a ~ dnorm(16, 1/3)
+  b ~ dnorm(1, 16)
+  theta ~ dgamma(a, b)
+}

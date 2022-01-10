@@ -1,0 +1,15 @@
+
+  model {
+  for (i in 1:6) {
+    for (j in ind[i]:(ind[i+1] - 1)) {
+      yL[j] ~ dpois(theta[i])
+    }
+  }
+  
+  for (i in 1:6) {
+    a[i] ~ dunif(14, 17)
+    b[i] ~ dunif(0.1, 1)
+    theta[i] ~ dnorm(a[i], 1/b[i])
+  }
+  
+}

@@ -1,0 +1,15 @@
+
+  model {
+  for (i in 1:6) {
+    for (j in ind[i]:(ind[i+1] - 1)) {
+      yL[j] ~ dpois(theta[i])
+    }
+  }
+  
+  for (i in 1:6) {
+    a[i] ~ dnorm(16, 1)
+    b[i] ~ dnorm(1, 100)
+    theta[i] ~ dgamma(a[i], b[i])
+  }
+  
+}
