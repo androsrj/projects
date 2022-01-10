@@ -1,0 +1,172 @@
+---
+title: "HW 7"
+author: "Jacob Andros"
+date: "December 4, 2019"
+output: html_document
+---
+
+```{r}
+#Read in data, clean out rows with zeroes, download libraries
+rawdata <- read.csv("diabetes.csv", header=TRUE, sep='')
+diabetes <- subset(rawdata, glucose != 0 & diastolic != 0 & triceps != 0 & insulin != 0 & bmi != 0 & age < 70)
+library(pROC)
+library(ggplot2)
+library(bestglm)
+library(GGally)
+```
+
+```{r}
+#Exploratory
+
+dia <- diabetes$diabetes
+glu <- diabetes$glucose
+bp <- diabetes$diastolic
+
+ggplot(data = diabetes, mapping=aes(y=dia, x=glu)) + geom_jitter(width=.5, height=.1) + geom_smooth(se=FALSE) + ggtitle("Figure 1: Exploratory Relationship Between Glucose Concentration and Diabetes") + xlab("Glucose Concentration") + ylab("Diabetes (Yes/No)")
+ggplot(data = diabetes, mapping=aes(y=dia, x=bp)) + geom_jitter(width=.5, height=.1) + geom_smooth(se=FALSE) + ggtitle("Figure 2: Exploratory Relationship Between Diastolic Blood Pressure and Diabetes") + xlab("Diastolic Blood Pressure") + ylab("Diabetes (Yes/No)")
+
+ggpairs(diabetes)
+
+```
+
+```{r}
+#Select variables and fit a model
+select_vars <- bestglm(diabetes, IC="AIC", method="exhaustive", family=binomial)
+obj <- select_vars$BestModel
+summary(obj)
+confint(obj)
+exp(confint(obj))
+100 * (exp(confint(obj)) - 1)
+```
+
+```{r}
+#Justify the linearity assumption
+bmi <- diabetes$bmi
+ped <- diabetes$pedigree
+age <- diabetes$age
+ggplot(data = diabetes, mapping=aes(y=dia, x=glu)) + geom_jitter(width=.5, height=.1) + geom_smooth(se=FALSE) + ggtitle("Figure 3: Monotonic Relationship Between Glucose Concentration and Diabetes") + xlab("Glucose Concentration") + ylab("Diabetes (Yes/No)")
+ggplot(data = diabetes, mapping=aes(y=dia, x=bmi)) + geom_jitter(width=.5, height=.1) + geom_smooth(se=FALSE) + ggtitle("Figure 4: Monotonic Relationship Between BMI and Diabetes") + xlab("BMI") + ylab("Diabetes (Yes/No)")
+ggplot(data = diabetes, mapping=aes(y=dia, x=ped)) + geom_jitter(width=.5, height=.1) + geom_smooth(se=FALSE) + ggtitle("Figure 5: Monotonic Relationship Between Family History and Diabetes") + xlab("Pedigree Rating") + ylab("Diabetes (Yes/No)")
+ggplot(data = diabetes, mapping=aes(y=dia, x=age)) + geom_jitter(width=.5, height=.1) + geom_smooth(se=FALSE) + ggtitle("Figure 6: Monotonic Relationship Between Age and Diabetes") + xlab("Age") + ylab("Diabetes (Yes/No)")
+```
+
+```{r}
+#Determine the classification threshold
+
+pred.probs <- predict.glm(obj, type="response")
+my.roc <- roc(diabetes$diabetes, pred.probs)
+ggplot() + geom_line(aes(x=1-my.roc[["specificities"]], y=my.roc[["sensitivities"]])) + geom_abline(intercept=0, slope=1) + ggtitle("Figure 8: ROC Curve") + xlab("1-Specificity") + ylab("Sensitivity")
+auc(my.roc)
+1 - (obj$deviance / obj$null.deviance)
+
+thresh <- seq(from=0, to=1, length=1000)
+misclass <- rep(NA,length=length(thresh)) #Empty vector to hold misclassification rates
+
+for(i in 1:length(thresh)) {
+  #If probability greater than threshold then 1 else 0
+  my.classification <- ifelse(pred.probs>thresh[i], 1, 0)
+  
+  # calculate the pct where my classification not eq truth
+  misclass[i] <- mean(my.classification!=diabetes$diabetes)
+}
+#Find threshold which minimizes miclassification
+(cutoff_prob <- thresh[which.min(misclass)])
+
+misclass_data <- data.frame(seq(from=0, to=1, length=1000), misclass)
+colnames(misclass_data) <- c("x", "y")
+
+ggplot(data = misclass_data, mapping=aes(y=y, x=x)) + geom_smooth(se=FALSE) + ggtitle("Figure 7: Misclassification Plot") + xlab("Cutoff Probability") + ylab("Misclassification Probability") + geom_vline(xintercept=cutoff_prob)
+```
+
+```{r}
+#Confusion Matrix (from all data)
+length <- nrow(diabetes)
+pred.class <- numeric(length)
+true.class <- numeric(length)
+for (i in 1:length) {
+  if (pred.probs[i] > cutoff_prob) {
+    pred.class[i] <- 1
+  }
+  else {
+    pred.class[i] <- 0
+  }
+  if (diabetes$diabetes[i] == 1) {
+    true.class[i] <- 1
+  }
+  else {
+    true.class[i] <- 0
+  }
+}
+
+(c <- addmargins(table(true.class, pred.class)))
+(sensit <- c[2,2] / c[2,3])
+(specif <- c[1,1] / c[1,3])
+(pos <- c[2,2] / c[3,2])
+(neg <- c[1,1] / c[3,1])
+```
+
+```{r}
+#AUC and Pseudo-R-Squared
+auc(my.roc)
+1 - (obj$deviance / obj$null.deviance)
+
+```
+```{r}
+#Cross Validation
+## Choose number of CV studies to run in a loop & test set size
+set.seed(123)
+n.cv <- 250
+n.test <- round(.1*nrow(diabetes))
+
+## Set my threshold for classifying
+cutoff <- cutoff_prob
+  
+## Initialize matrices to hold CV results
+sens <- rep(NA, n.cv)
+spec <- rep(NA, n.cv)
+ppv <- rep(NA, n.cv)
+npv <- rep(NA, n.cv)
+auc <- rep(NA, n.cv)
+
+## Begin for loop
+for(cv in 1:n.cv){
+  ## Separate into test and training sets
+  test.obs <- sample(1:nrow(diabetes), n.test)
+  test.set <- diabetes[test.obs,]
+  train.set <- diabetes[-test.obs,]
+  
+  ## Fit best model to training set
+  train.model <- glm(diabetes ~ glucose+bmi+pedigree+age, data=train.set, family=binomial)
+  
+  ## Use fitted model to predict test set
+  pred.probs <- predict.glm(train.model,newdata=test.set, type="response") #response gives probabilities
+
+  ## Classify according to threshold
+  test.class <- ifelse(pred.probs>cutoff, 1, 0)
+  
+  ## Create a confusion matrix
+  conf.mat <- addmargins(table(factor(test.set$diabetes, levels=c(1, 0)), factor(test.class, levels=c(1, 0))))
+
+  ## Pull of sensitivity, specificity, PPV and NPV using bracket notation
+  sens[cv] <- conf.mat[1,1] / conf.mat[1,3]
+  spec[cv] <- conf.mat[2,2] / conf.mat[2,3]
+  ppv[cv] <- conf.mat[1,1] / conf.mat[3,1]
+  npv[cv] <- conf.mat[2,2] / conf.mat[3,2]
+    
+  ## Calculate AUC
+  auc[cv] <- auc(roc(test.set$diabetes, pred.probs))
+} #End for-loop
+mean(sens)
+mean(spec)
+mean(ppv)
+mean(npv)
+mean(auc)
+```
+
+```{r}
+#Prediction for patient
+pred_dframe <- data.frame(glucose=90, bmi=25.1, pedigree=1.268, age=25)
+pred.log.odds <- predict.glm(obj, newdata=pred_dframe, type="response")
+pred.log.odds
+```
+

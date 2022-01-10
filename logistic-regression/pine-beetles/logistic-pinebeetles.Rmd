@@ -1,0 +1,200 @@
+---
+title: "Final Exam"
+author: "Jacob Andros"
+date: "December 13, 2019"
+output: html_document
+---
+
+```{r, warning=FALSE}
+#Read in data
+pine <- read.csv("C:/Users/Jacob/Downloads/RFiles/PineBeetle.csv", header = TRUE)
+
+#Install libraries
+library(pROC)
+library(ggplot2)
+library(bestglm)
+library(GGally)
+
+#Convert the yes/no infested variable to a 0-1 numeric variable
+ind <- numeric(nrow(pine))
+Infested <- numeric(nrow(pine))
+for (i in 1:nrow(pine)) {
+  if (pine$Infested[i] == "Yes") {
+    Infested[i] <- 1
+  }
+  else {
+    Infested[i] <- 0
+  }
+}
+pine <- data.frame(pine[, 1:12], Infested)
+
+```
+
+```{r}
+#Examine distributions of each quantitative explanatory variable
+hist(pine$January, breaks=25, xlab = "Average January Min Temp", main = "Histogram of January Temp")
+hist(pine$August_max, breaks=25, xlab = "Average August Max Temp", main = "Histogram of August Temp")
+hist(pine$Elev, breaks=25, xlab = "Elevation", main = "Histogram of Elevation")
+hist(pine$Slope, breaks=25, xlab = "Slope", main = "Histogram of Slope")
+hist(pine$Precip, breaks=25, xlab = "Precipitation", main = "Histogram of Precipitation")
+```
+
+
+```{r}
+#Variable selection
+select_vars <- bestglm(pine, IC="BIC", method="exhaustive", family=binomial)
+obj <- select_vars$BestModel
+summary(obj)
+
+#Confidence intervals for the model
+confint(obj)
+exp(confint(obj))
+100*(exp(confint(obj)) - 1)
+```
+
+
+```{r}
+#Check the assumption of log-odds linearity (monotonicity) - for quantiative variables only
+January_Temp <- pine$January
+August_Temp <- pine$August_max
+Slope <- pine$Slope
+Elevation <- pine$Elev
+Precipitation <- pine$Precip
+inf <- pine$Infested
+ggplot(data = pine, mapping=aes(y=inf, x=January_Temp)) + geom_point() + geom_smooth(se=FALSE) + ylab("Infested (Yes/No)") + geom_smooth(method=lm, se=FALSE, color="red") + ggtitle("Exploratory Relationship Between January Temperature and Infestation")
+ggplot(data = pine, mapping=aes(y=inf, x=August_Temp)) + geom_point() + geom_smooth(se=FALSE) + ylab("Infested (Yes/No)") + geom_smooth(method=lm, se=FALSE, color="red") + ggtitle("Exploratory Relationship Between August Temperature and Infestation")
+ggplot(data = pine, mapping=aes(y=inf, x=Slope)) + geom_point() + geom_smooth(se=FALSE) + ylab("Infested (Yes/No)") + geom_smooth(method=lm, se=FALSE, color="red") + ggtitle("Exploratory Relationship Between Slope and Infestation")
+ggplot(data = pine, mapping=aes(y=inf, x=Elevation)) + geom_point() + geom_smooth(se=FALSE) + ylab("Infested (Yes/No)") + geom_smooth(method=lm, se=FALSE, color="red") + ggtitle("Exploratory Relationship Between Elevation and Infestation")
+ggplot(data = pine, mapping=aes(y=inf, x=Precipitation)) + geom_point() + geom_smooth(se=FALSE) + ylab("Infested (Yes/No)") + geom_smooth(method=lm, se=FALSE, color="red") + ggtitle("Exploratory Relationship Between Precipitation and Infestation")
+```
+
+```{r}
+#Determine the classification threshold
+
+pred.probs <- predict.glm(obj, type="response")
+my.roc <- roc(pine$Infested, pred.probs)
+ggplot() + geom_line(aes(x=1-my.roc[["specificities"]], y=my.roc[["sensitivities"]])) + geom_abline(intercept=0, slope=1) + ggtitle("ROC Curve") + xlab("1-Specificity") + ylab("Sensitivity")
+
+thresh <- seq(from=0, to=1, length=1000)
+misclass <- rep(NA,length=length(thresh)) #Empty vector to hold misclassification rates
+
+for(i in 1:length(thresh)) {
+  #If the probability is greater than the threshold then 1, else 0
+  my.classification <- ifelse(pred.probs>thresh[i], 1, 0)
+  
+  # calculate the rate at which the classification does not agree with the observation
+  misclass[i] <- mean(my.classification!=pine$Infested)
+}
+#Find and plot threshold which minimizes miclassification
+(cutoff_prob <- thresh[which.min(misclass)])
+
+misclass_data <- data.frame(seq(from=0, to=1, length=1000), misclass)
+colnames(misclass_data) <- c("x", "y")
+
+ggplot(data = misclass_data, mapping=aes(y=y, x=x)) + geom_line() + ggtitle("Misclassification Plot") + xlab("Cutoff Probability") + ylab("Misclassification Probability") + geom_vline(xintercept=cutoff_prob)
+
+
+```
+
+```{r}
+#Confusion Matrix (from all data)
+length <- nrow(pine)
+pred.class <- numeric(length)
+true.class <- numeric(length)
+for (i in 1:length) {
+  if (pred.probs[i] > cutoff_prob) {
+    pred.class[i] <- 1
+  }
+  else {
+    pred.class[i] <- 0
+  }
+  if (pine$Infested[i] == 1) {
+    true.class[i] <- 1
+  }
+  else {
+    true.class[i] <- 0
+  }
+}
+(c <- addmargins(table(true.class, pred.class)))
+
+#Sensitivity, specificity, ppv, and npv (for all data)
+(sensit <- c[2,2] / c[2,3])
+(specif <- c[1,1] / c[1,3])
+(pos <- c[2,2] / c[3,2])
+(neg <- c[1,1] / c[3,1])
+```
+
+```{r}
+#AUC and Pseudo-R-Squared
+auc(my.roc)
+1 - (obj$deviance / obj$null.deviance)
+```
+
+
+```{r}
+#Cross Validation
+## Choose number of CV studies to run in a loop & test set size
+set.seed(123)
+n.cv <- 250
+n.test <- round(.1*nrow(pine))
+
+## Set my threshold for classifying
+cutoff <- cutoff_prob
+  
+## Initialize matrices to hold CV results
+sens <- rep(NA, n.cv)
+spec <- rep(NA, n.cv)
+ppv <- rep(NA, n.cv)
+npv <- rep(NA, n.cv)
+auc <- rep(NA, n.cv)
+
+## Begin for loop
+for(cv in 1:n.cv){
+  ## Separate into test and training sets
+  test.obs <- sample(1:nrow(pine), n.test)
+  test.set <- pine[test.obs,]
+  train.set <- pine[-test.obs,]
+  
+  ## Fit best model to training set
+  train.model <- glm(Infested ~ January+Precip+NC+SE, data=train.set, family=binomial)
+  
+  ## Use fitted model to predict test set
+  pred.probs <- predict.glm(train.model,newdata=test.set, type="response") #response gives probabilities
+
+  ## Classify according to threshold
+  test.class <- ifelse(pred.probs>cutoff, 1, 0)
+  
+  ## Create a confusion matrix
+  conf.mat <- addmargins(table(factor(test.set$Infested, levels=c(1, 0)), factor(test.class, levels=c(1, 0))))
+
+  ## Pull of sensitivity, specificity, PPV and NPV using bracket notation
+  sens[cv] <- conf.mat[1,1] / conf.mat[1,3]
+  spec[cv] <- conf.mat[2,2] / conf.mat[2,3]
+  ppv[cv] <- conf.mat[1,1] / conf.mat[3,1]
+  npv[cv] <- conf.mat[2,2] / conf.mat[3,2]
+    
+  ## Calculate AUC
+  auc[cv] <- auc(roc(test.set$Infested, pred.probs))
+} #End for-loop
+mean(sens)
+mean(spec)
+mean(ppv)
+mean(npv)
+mean(auc)
+```
+
+```{r}
+#Prediction for forest
+jan <- c(-13.98, -17.8, -17.27, -12.52, -15.99, -11.97, -15.75, -16.19, -17.87, -12.44)
+aug <- c(15.89, 18.07, 16.74, 18.06, 18.23, 15.81, 16.85, 16.51, 17.84, 16.96)
+prec <- c(771.13, 788.54, 677.63, 522.77, 732.32, 615.96, 805.9, 714.57, 740.5, 801.22)
+pred.log.odds <- numeric(length(jan))
+
+for (i in 1:length(jan)) {
+  pred_dframe <- data.frame(January=jan[i], August_max=aug[i], Precip=prec[i], NC="No", SE="Yes")
+  pred.log.odds[i] <- predict.glm(obj, newdata=pred_dframe, type="response")
+}
+pred.log.odds
+```
+
+
